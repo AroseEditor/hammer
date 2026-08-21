@@ -1,4 +1,7 @@
 #include "cli.h"
+#include "loop.h"
+#include "net_compat.h"
+#include "stats.h"
 
 #include <cstdio>
 #include <string>
@@ -26,14 +29,23 @@ int main(int argc, char** argv) {
       break;
   }
 
-  const hammer::Config& cfg = parsed.config;
-  std::printf("Running %ds test @ %s\n", cfg.duration_s, cfg.raw_url.c_str());
-  if (cfg.open_loop) {
-    std::printf("  %d threads, %d connections, open loop @ %llu req/s\n", cfg.threads,
-                cfg.connections, static_cast<unsigned long long>(cfg.rate));
-  } else {
-    std::printf("  %d threads, %d connections, closed loop\n", cfg.threads, cfg.connections);
+  const hammer::net::Startup network;
+  hammer::net::ignore_sigpipe();
+
+  hammer::Config effective = parsed.config;
+  effective.threads = 1;
+  effective.connections = 1;
+  effective.open_loop = false;
+
+  hammer::print_banner(effective);
+  std::fputs("  (blocking single-connection mode; the event loop is not wired up yet)\n", stderr);
+
+  const hammer::RunResult result = hammer::run_blocking(effective);
+  if (!result.ok) {
+    std::fprintf(stderr, "hammer: %s\n", result.error.c_str());
+    return 1;
   }
-  std::fputs("hammer: load generation is not wired up yet\n", stderr);
+
+  hammer::print_report(effective, result.stats, result.elapsed_seconds);
   return 0;
 }

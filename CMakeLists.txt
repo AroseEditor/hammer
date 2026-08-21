@@ -66,6 +66,9 @@ add_library(hammer_core STATIC
   src/cli.cpp
   src/http_parser.cpp
   src/histogram.cpp
+  src/conn.cpp
+  src/stats.cpp
+  src/loop.cpp
 )
 target_include_directories(hammer_core PUBLIC src)
 target_compile_definitions(hammer_core PUBLIC HAMMER_VERSION_STRING="${HAMMER_VERSION}")
@@ -96,8 +99,13 @@ add_executable(hammer_tests
   tests/test_cli.cpp
   tests/test_parser.cpp
   tests/test_histogram.cpp
+  tests/test_integration.cpp
 )
 target_link_libraries(hammer_tests PRIVATE hammer_core Catch2::Catch2WithMain)
+target_include_directories(hammer_tests PRIVATE tests)
+
+find_package(Threads REQUIRED)
+target_link_libraries(hammer_core PUBLIC Threads::Threads)
 
 catch_discover_tests(hammer_tests)
 
