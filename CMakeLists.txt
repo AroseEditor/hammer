@@ -64,6 +64,7 @@ message(STATUS "hammer version ${HAMMER_VERSION}, sanitizer ${HAMMER_SANITIZER_A
 
 add_library(hammer_core STATIC
   src/cli.cpp
+  src/http_parser.cpp
 )
 target_include_directories(hammer_core PUBLIC src)
 target_compile_definitions(hammer_core PUBLIC HAMMER_VERSION_STRING="${HAMMER_VERSION}")
@@ -92,7 +93,20 @@ include(Catch)
 
 add_executable(hammer_tests
   tests/test_cli.cpp
+  tests/test_parser.cpp
 )
 target_link_libraries(hammer_tests PRIVATE hammer_core Catch2::Catch2WithMain)
 
 catch_discover_tests(hammer_tests)
+
+option(HAMMER_FUZZ "build the libFuzzer parser target (clang only)" OFF)
+
+if(HAMMER_FUZZ)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "HAMMER_FUZZ needs clang; ${CMAKE_CXX_COMPILER_ID} has no libFuzzer")
+  endif()
+  add_executable(fuzz_parser tests/fuzz_parser.cpp src/http_parser.cpp)
+  target_include_directories(fuzz_parser PRIVATE src)
+  target_compile_options(fuzz_parser PRIVATE -fsanitize=fuzzer,address,undefined -g)
+  target_link_options(fuzz_parser PRIVATE -fsanitize=fuzzer,address,undefined)
+endif()
