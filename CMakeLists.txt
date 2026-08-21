@@ -65,6 +65,7 @@ message(STATUS "hammer version ${HAMMER_VERSION}, sanitizer ${HAMMER_SANITIZER_A
 add_library(hammer_core STATIC
   src/cli.cpp
   src/http_parser.cpp
+  src/histogram.cpp
 )
 target_include_directories(hammer_core PUBLIC src)
 target_compile_definitions(hammer_core PUBLIC HAMMER_VERSION_STRING="${HAMMER_VERSION}")
@@ -94,6 +95,7 @@ include(Catch)
 add_executable(hammer_tests
   tests/test_cli.cpp
   tests/test_parser.cpp
+  tests/test_histogram.cpp
 )
 target_link_libraries(hammer_tests PRIVATE hammer_core Catch2::Catch2WithMain)
 
