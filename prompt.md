@@ -197,7 +197,7 @@ works from a clean clone.
 
 `git commit -m "scaffold cmake build with sanitizer presets"`
 
-### [ ] P1 — argument parsing
+### [x] P1 — argument parsing
 
 Every flag above. A `Config` struct with validated fields. URL parsing splits scheme, host,
 port, path — reject anything that isn't `http://`, and say so clearly rather than failing
