@@ -3,6 +3,7 @@
 #include "conn.h"
 #include "poller.h"
 #include "stats.h"
+#include "timer_wheel.h"
 
 #include <chrono>
 #include <string>
@@ -32,7 +33,7 @@ private:
   void on_readable(size_t index);
   void finish_response(size_t index);
   void note_connect_failure();
-  void expire_connects();
+  void on_timeout(size_t index);
   void dispatch(size_t index);
   Clock::time_point release_scheduled();
 
@@ -42,6 +43,7 @@ private:
   bool head_request_ = false;
 
   Poller poller_;
+  TimerWheel timers_;
   std::vector<Conn> conns_;
   std::unordered_map<net::socket_t, size_t> index_by_fd_;
   std::vector<size_t> pending_open_;

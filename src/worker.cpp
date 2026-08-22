@@ -1,5 +1,7 @@
 #include "worker.h"
 
+#include "signals.h"
+
 #include <algorithm>
 
 namespace hammer {
@@ -66,9 +68,11 @@ void Worker::open_connection(size_t index) {
   }
   conn.state = ConnState::Connecting;
   conn.request_started = Clock::now();
+  timers_.arm(index, conn.request_started);
 }
 
 void Worker::close_connection(size_t index) {
+  timers_.disarm(index);
   Conn& conn = conns_[index];
   if (net::valid(conn.fd)) {
     poller_.del(conn.fd);
@@ -89,7 +93,9 @@ void Worker::begin_request(size_t index) {
   if (interval_ns_ <= 0.0) {
     conn.intended_departure = Clock::now();
     conn.request_started = conn.intended_departure;
+    conn.claimed_late = false;
     conn.state = ConnState::Writing;
+    timers_.arm(index, conn.request_started);
     flush_write(index);
     return;
   }
@@ -98,6 +104,7 @@ void Worker::begin_request(size_t index) {
   const double offset = static_cast<double>(departures_++) * interval_ns_;
   conn.intended_departure = t0_ + std::chrono::nanoseconds(static_cast<int64_t>(offset));
   conn.state = ConnState::Scheduled;
+  timers_.disarm(index);
   poller_.mod(conn.fd, false, false);
 
   const Clock::time_point now = Clock::now();
@@ -119,6 +126,7 @@ void Worker::dispatch(size_t index) {
   }
 
   conn.state = ConnState::Writing;
+  timers_.arm(index, conn.request_started);
   flush_write(index);
 }
 
@@ -230,6 +238,7 @@ void Worker::on_readable(size_t index) {
 }
 
 void Worker::finish_response(size_t index) {
+  timers_.disarm(index);
   Conn& conn = conns_[index];
 
   const Clock::time_point origin =
@@ -246,25 +255,22 @@ void Worker::finish_response(size_t index) {
   begin_request(index);
 }
 
-void Worker::expire_connects() {
-  // WSAPoll never signals a failed non-blocking connect, so a deadline is the only way out
-  const Clock::time_point now = Clock::now();
-  const auto limit = std::chrono::milliseconds(config_.timeout_ms);
-
-  for (size_t i = 0; i < conns_.size(); ++i) {
-    Conn& conn = conns_[i];
-    if (conn.state != ConnState::Connecting) continue;
-    if (now - conn.request_started < limit) continue;
+void Worker::on_timeout(size_t index) {
+  // WSAPoll never signals a failed non-blocking connect, so the deadline is the only way out
+  if (conns_[index].state == ConnState::Connecting) {
     note_connect_failure();
-    close_connection(i);
+  } else {
+    ++stats_.timeouts;
   }
+  close_connection(index);
 }
 
 void Worker::run(Clock::time_point start, Clock::time_point deadline) {
   t0_ = start;
+  timers_.configure(conns_.size(), std::chrono::milliseconds(config_.timeout_ms), start);
   for (size_t i = 0; i < conns_.size() && error_.empty(); ++i) open_connection(i);
 
-  while (Clock::now() < deadline && error_.empty()) {
+  while (Clock::now() < deadline && error_.empty() && !stop_requested()) {
     const Clock::time_point next_departure = release_scheduled();
 
     const Clock::time_point now = Clock::now();
@@ -272,6 +278,11 @@ void Worker::run(Clock::time_point start, Clock::time_point deadline) {
     if (next_departure != Clock::time_point::max()) {
       slice = std::chrono::duration_cast<std::chrono::milliseconds>(next_departure - now).count();
       if (slice <= kSpinBelowMs) slice = 0;
+    }
+    if (timers_.armed_count() > 0) {
+      const auto tick =
+          std::chrono::duration_cast<std::chrono::milliseconds>(timers_.resolution()).count();
+      slice = std::min<long long>(slice, std::max<long long>(tick, 1));
     }
     const auto remaining =
         std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
@@ -296,7 +307,7 @@ void Worker::run(Clock::time_point start, Clock::time_point deadline) {
       }
     }
 
-    expire_connects();
+    timers_.expire(Clock::now(), [this](size_t index) { on_timeout(index); });
 
     opening_.swap(pending_open_);
     for (size_t index : opening_) {
@@ -306,7 +317,9 @@ void Worker::run(Clock::time_point start, Clock::time_point deadline) {
     opening_.clear();
   }
 
-  for (Conn& conn : conns_) {
+  for (size_t i = 0; i < conns_.size(); ++i) {
+    timers_.disarm(i);
+    Conn& conn = conns_[i];
     if (net::valid(conn.fd)) {
       poller_.del(conn.fd);
       index_by_fd_.erase(conn.fd);

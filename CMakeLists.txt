@@ -76,6 +76,7 @@ add_library(hammer_core STATIC
   src/stats.cpp
   src/loop.cpp
   src/worker.cpp
+  src/signals.cpp
   ${HAMMER_POLLER_SOURCE}
 )
 target_include_directories(hammer_core PUBLIC src)
@@ -109,6 +110,7 @@ add_executable(hammer_tests
   tests/test_histogram.cpp
   tests/test_integration.cpp
   tests/test_alloc.cpp
+  tests/test_timer_wheel.cpp
 )
 target_link_libraries(hammer_tests PRIVATE hammer_core Catch2::Catch2WithMain)
 target_include_directories(hammer_tests PRIVATE tests)

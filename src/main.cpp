@@ -1,6 +1,7 @@
 #include "cli.h"
 #include "loop.h"
 #include "net_compat.h"
+#include "signals.h"
 #include "stats.h"
 
 #include <cstdio>
@@ -31,6 +32,7 @@ int main(int argc, char** argv) {
 
   const hammer::net::Startup network;
   hammer::net::ignore_sigpipe();
+  hammer::install_signal_handlers();
 
   const hammer::Config& effective = parsed.config;
 

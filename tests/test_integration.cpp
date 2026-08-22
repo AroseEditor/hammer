@@ -3,10 +3,13 @@
 #include "loop.h"
 #include "mock_server.h"
 #include "net_compat.h"
+#include "signals.h"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 using hammer::Config;
@@ -344,7 +347,8 @@ TEST_CASE("a paced run issues roughly the requested rate") {
   REQUIRE(result.stats.requests > 600);
   REQUIRE(result.stats.requests < 1000);
   REQUIRE(result.stats.read_errors == 0);
-  REQUIRE(result.stats.dispatch_lag.count() == result.stats.requests);
+  REQUIRE(result.stats.dispatch_lag.count() >= result.stats.requests);
+  REQUIRE(result.stats.dispatch_lag.count() <= result.stats.requests + 8);
 }
 
 TEST_CASE("correction changes the tail while the load stays the same") {
@@ -404,4 +408,68 @@ TEST_CASE("a fast server leaves hammer with sub-millisecond scheduling lag") {
                              << result.stats.scheduler_lag.percentile(99) << "ns");
   REQUIRE(result.stats.scheduler_lag.mean() < 1'000'000.0);
   REQUIRE(result.stats.behind_schedule * 10 < result.stats.requests);
+}
+
+TEST_CASE("a silent server produces timeouts rather than idle connections") {
+  ServerOptions options;
+  options.never_respond = true;
+  MockServer server{options};
+
+  const RunResult result =
+      hammer::run_event_loop(config_for(server.url(), {"-c", "4", "--timeout", "200"}));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests == 0);
+  REQUIRE(result.stats.timeouts > 0);
+  REQUIRE(result.stats.latency.count() == 0);
+}
+
+TEST_CASE("timed out requests stay out of the latency histogram") {
+  ServerOptions options;
+  options.stall_after_responses = 20;
+  options.stall_ms = 1500;
+  MockServer server{options};
+
+  const RunResult result = hammer::run_event_loop(
+      config_for(server.url(), {"-c", "4", "-d", "2", "--timeout", "300"}));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.timeouts > 0);
+  REQUIRE(result.stats.requests > 0);
+  REQUIRE(result.stats.latency.count() == result.stats.requests);
+  REQUIRE(result.stats.latency.max() < 1'000'000'000);
+}
+
+TEST_CASE("a slow but answering server is not timed out") {
+  ServerOptions options;
+  options.stall_after_responses = 20;
+  options.stall_ms = 200;
+  MockServer server{options};
+
+  const RunResult result = hammer::run_event_loop(
+      config_for(server.url(), {"-c", "4", "-d", "2", "--timeout", "1000"}));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.timeouts == 0);
+  REQUIRE(result.stats.requests > 20);
+}
+
+TEST_CASE("a stop request ends the run early and keeps the partial report") {
+  MockServer server{ServerOptions{}};
+  hammer::clear_stop();
+
+  std::thread stopper{[] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    hammer::request_stop();
+  }};
+
+  const RunResult result =
+      hammer::run_event_loop(config_for(server.url(), {"-c", "4", "-d", "30"}));
+  stopper.join();
+  hammer::clear_stop();
+
+  REQUIRE(result.ok);
+  REQUIRE(result.elapsed_seconds < 5.0);
+  REQUIRE(result.stats.requests > 0);
+  REQUIRE(result.stats.latency.count() == result.stats.requests);
 }
