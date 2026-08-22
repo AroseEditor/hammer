@@ -108,6 +108,7 @@ add_executable(hammer_tests
   tests/test_parser.cpp
   tests/test_histogram.cpp
   tests/test_integration.cpp
+  tests/test_alloc.cpp
 )
 target_link_libraries(hammer_tests PRIVATE hammer_core Catch2::Catch2WithMain)
 target_include_directories(hammer_tests PRIVATE tests)

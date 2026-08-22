@@ -33,11 +33,10 @@ int main(int argc, char** argv) {
   hammer::net::ignore_sigpipe();
 
   hammer::Config effective = parsed.config;
-  effective.threads = 1;
   effective.open_loop = false;
 
   hammer::print_banner(effective);
-  std::fputs("  (single event loop thread; sharding and open loop are not wired up yet)\n", stderr);
+  std::fputs("  (open-loop scheduling is not wired up yet; running closed loop)\n", stderr);
 
   const hammer::RunResult result = hammer::run_event_loop(effective);
   if (!result.ok) {

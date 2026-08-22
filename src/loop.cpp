@@ -4,7 +4,11 @@
 #include "http_parser.h"
 #include "worker.h"
 
+#include <algorithm>
+#include <memory>
+
 #include <chrono>
+#include <thread>
 #include <vector>
 
 namespace hammer {
@@ -195,14 +199,34 @@ RunResult run_event_loop(const Config& config) {
   if (!resolve_endpoint(config.url, endpoint, result.error)) return result;
 
   const std::string request = build_request(config);
+  const int thread_count = std::min(config.threads, config.connections);
 
-  Worker worker{config, endpoint, request, config.connections};
+  std::vector<std::unique_ptr<Worker>> workers;
+  workers.reserve(static_cast<size_t>(thread_count));
+
+  const int base = config.connections / thread_count;
+  const int remainder = config.connections % thread_count;
+  for (int i = 0; i < thread_count; ++i) {
+    workers.push_back(std::make_unique<Worker>(config, endpoint, request,
+                                               base + (i < remainder ? 1 : 0)));
+  }
+
   const Clock::time_point start = Clock::now();
-  worker.run(start + std::chrono::seconds(config.duration_s));
+  const Clock::time_point deadline = start + std::chrono::seconds(config.duration_s);
+
+  std::vector<std::thread> threads;
+  threads.reserve(static_cast<size_t>(thread_count));
+  for (int i = 1; i < thread_count; ++i) {
+    threads.emplace_back([&workers, deadline, i] { workers[static_cast<size_t>(i)]->run(deadline); });
+  }
+  workers[0]->run(deadline);
+  for (std::thread& thread : threads) thread.join();
 
   result.elapsed_seconds = std::chrono::duration<double>(Clock::now() - start).count();
-  result.stats.merge(worker.stats());
-  result.error = worker.error();
+  for (const std::unique_ptr<Worker>& worker : workers) {
+    result.stats.merge(worker->stats());
+    if (result.error.empty()) result.error = worker->error();
+  }
   result.ok = result.error.empty();
   return result;
 }

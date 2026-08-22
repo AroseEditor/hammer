@@ -302,3 +302,35 @@ TEST_CASE("the event loop gives up on a refused port instead of spinning") {
   REQUIRE(result.stats.connect_errors > 0);
   REQUIRE(result.elapsed_seconds < 5.0);
 }
+
+TEST_CASE("connections are sharded across worker threads") {
+  MockServer server{ServerOptions{}};
+  const RunResult result =
+      hammer::run_event_loop(config_for(server.url(), {"-c", "16", "-t", "4"}));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests > 16);
+  REQUIRE(result.stats.latency.count() == result.stats.requests);
+  REQUIRE(result.stats.read_errors == 0);
+  REQUIRE(result.stats.connect_errors == 0);
+}
+
+TEST_CASE("more threads than connections does not starve a thread") {
+  MockServer server{ServerOptions{}};
+  const RunResult result =
+      hammer::run_event_loop(config_for(server.url(), {"-c", "3", "-t", "3"}));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests > 3);
+  REQUIRE(result.stats.read_errors == 0);
+}
+
+TEST_CASE("an uneven shard split still uses every connection") {
+  MockServer server{ServerOptions{}};
+  const RunResult result =
+      hammer::run_event_loop(config_for(server.url(), {"-c", "7", "-t", "3"}));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests > 7);
+  REQUIRE(result.stats.read_errors == 0);
+}

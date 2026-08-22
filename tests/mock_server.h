@@ -118,9 +118,11 @@ private:
 
     int served_here = 0;
     std::vector<char> buffer(8192);
+    std::string request;
+    request.reserve(8192);
 
     while (running_) {
-      std::string request;
+      request.clear();
       bool got_request = false;
       while (running_) {
         const long n = net::recv_bytes(client, buffer.data(), buffer.size());
