@@ -96,4 +96,31 @@ net::socket_t open_socket(const Endpoint& endpoint) {
   return handle;
 }
 
+ConnectStart start_connect(const Endpoint& endpoint, net::socket_t& out) {
+  out = net::kInvalidSocket;
+
+  const net::socket_t handle = open_socket(endpoint);
+  if (!net::valid(handle)) return ConnectStart::Failed;
+  if (!net::set_nonblocking(handle)) {
+    net::close_socket(handle);
+    return ConnectStart::Failed;
+  }
+
+  const int status = ::connect(handle, reinterpret_cast<const sockaddr*>(&endpoint.storage),
+                               endpoint.length);
+  if (status == 0) {
+    out = handle;
+    return ConnectStart::Established;
+  }
+
+  const int error = net::last_error();
+  if (net::connect_in_progress(error) || net::would_block(error)) {
+    out = handle;
+    return ConnectStart::InProgress;
+  }
+
+  net::close_socket(handle);
+  return ConnectStart::Failed;
+}
+
 }

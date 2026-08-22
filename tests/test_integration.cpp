@@ -194,3 +194,111 @@ TEST_CASE("a body gets a content length and lands after the headers") {
   REQUIRE(request.find("Content-Length: 7\r\n") != std::string::npos);
   REQUIRE(request.substr(request.size() - 11) == "\r\n\r\na=1&b=2");
 }
+
+TEST_CASE("the event loop drives a keep-alive server end to end") {
+  MockServer server{ServerOptions{}};
+  const RunResult result = hammer::run_event_loop(config_for(server.url()));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests > 0);
+  REQUIRE(result.stats.latency.count() == result.stats.requests);
+  REQUIRE(result.stats.non_2xx == 0);
+  REQUIRE(result.stats.connect_errors == 0);
+  REQUIRE(result.stats.read_errors == 0);
+  REQUIRE(result.stats.write_errors == 0);
+  REQUIRE(result.stats.bytes_read >= result.stats.requests * 50);
+  REQUIRE(server.requests_served() >= result.stats.requests);
+  REQUIRE(server.requests_served() <= result.stats.requests + 1);
+}
+
+TEST_CASE("the event loop beats the blocking client on the same server") {
+  MockServer server{ServerOptions{}};
+
+  const RunResult blocking = hammer::run_blocking(config_for(server.url()));
+  const RunResult evented = hammer::run_event_loop(config_for(server.url(), {"-c", "16"}));
+
+  REQUIRE(blocking.ok);
+  REQUIRE(evented.ok);
+  REQUIRE(evented.stats.requests > blocking.stats.requests);
+  REQUIRE(evented.stats.read_errors == 0);
+}
+
+TEST_CASE("many connections all make progress") {
+  MockServer server{ServerOptions{}};
+  const RunResult result = hammer::run_event_loop(config_for(server.url(), {"-c", "32"}));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests > 32);
+  REQUIRE(result.stats.read_errors == 0);
+  REQUIRE(result.stats.connect_errors == 0);
+}
+
+TEST_CASE("the event loop handles chunked responses") {
+  ServerOptions options;
+  options.response =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+  MockServer server{options};
+
+  const RunResult result = hammer::run_event_loop(config_for(server.url(), {"-c", "8"}));
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests > 0);
+  REQUIRE(result.stats.read_errors == 0);
+  REQUIRE(result.stats.non_2xx == 0);
+}
+
+TEST_CASE("the event loop reconnects after connection close responses") {
+  ServerOptions options;
+  options.response = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\nhi";
+  options.close_after_response = true;
+  MockServer server{options};
+
+  const RunResult result = hammer::run_event_loop(config_for(server.url(), {"-c", "4"}));
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests > 4);
+  REQUIRE(result.stats.read_errors == 0);
+}
+
+TEST_CASE("the event loop treats an early keep-alive close as a reconnect") {
+  ServerOptions options;
+  options.responses_before_close = 3;
+  MockServer server{options};
+
+  const RunResult result = hammer::run_event_loop(config_for(server.url(), {"-c", "4"}));
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests > 12);
+  REQUIRE(result.stats.read_errors == 0);
+}
+
+TEST_CASE("the event loop counts garbage as a read error without hanging") {
+  ServerOptions options;
+  options.response = "not http at all\r\n\r\n";
+  MockServer server{options};
+
+  const RunResult result = hammer::run_event_loop(config_for(server.url(), {"-c", "4"}));
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests == 0);
+  REQUIRE(result.stats.read_errors > 0);
+  REQUIRE(result.elapsed_seconds < 4.0);
+}
+
+TEST_CASE("the event loop survives a server that never responds") {
+  ServerOptions options;
+  options.never_respond = true;
+  MockServer server{options};
+
+  const RunResult result = hammer::run_event_loop(config_for(server.url(), {"-c", "4"}));
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests == 0);
+  REQUIRE(result.elapsed_seconds < 4.0);
+}
+
+TEST_CASE("the event loop gives up on a refused port instead of spinning") {
+  const std::string url =
+      "http://127.0.0.1:" + std::to_string(hammer::testing::reserve_closed_port()) + "/";
+  const RunResult result =
+      hammer::run_event_loop(config_for(url, {"-c", "4", "--timeout", "200"}));
+
+  REQUIRE(result.stats.requests == 0);
+  REQUIRE(result.stats.connect_errors > 0);
+  REQUIRE(result.elapsed_seconds < 5.0);
+}

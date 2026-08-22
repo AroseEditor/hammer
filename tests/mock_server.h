@@ -3,6 +3,7 @@
 #include "net_compat.h"
 
 #include <atomic>
+#include <mutex>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -90,8 +91,24 @@ private:
     while (running_) {
       const net::socket_t client = ::accept(listener_, nullptr, nullptr);
       if (!net::valid(client)) break;
-      handle(client);
-      net::close_socket(client);
+      if (!running_) {
+        net::close_socket(client);
+        break;
+      }
+      std::lock_guard<std::mutex> guard{clients_mutex_};
+      clients_.emplace_back([this, client] {
+        handle(client);
+        net::close_socket(client);
+      });
+    }
+
+    std::vector<std::thread> clients;
+    {
+      std::lock_guard<std::mutex> guard{clients_mutex_};
+      clients.swap(clients_);
+    }
+    for (std::thread& client : clients) {
+      if (client.joinable()) client.join();
     }
   }
 
@@ -146,6 +163,8 @@ private:
   uint16_t port_ = 0;
   std::atomic<bool> running_{true};
   std::atomic<uint64_t> served_{0};
+  std::mutex clients_mutex_;
+  std::vector<std::thread> clients_;
   std::thread worker_;
 };
 

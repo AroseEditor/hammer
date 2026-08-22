@@ -2,6 +2,7 @@
 
 #include "conn.h"
 #include "http_parser.h"
+#include "worker.h"
 
 #include <chrono>
 #include <vector>
@@ -182,6 +183,26 @@ RunResult run_blocking(const Config& config) {
 
   result.elapsed_seconds =
       std::chrono::duration<double>(Clock::now() - start).count();
+  result.ok = result.error.empty();
+  return result;
+}
+
+
+RunResult run_event_loop(const Config& config) {
+  RunResult result;
+
+  Endpoint endpoint;
+  if (!resolve_endpoint(config.url, endpoint, result.error)) return result;
+
+  const std::string request = build_request(config);
+
+  Worker worker{config, endpoint, request, config.connections};
+  const Clock::time_point start = Clock::now();
+  worker.run(start + std::chrono::seconds(config.duration_s));
+
+  result.elapsed_seconds = std::chrono::duration<double>(Clock::now() - start).count();
+  result.stats.merge(worker.stats());
+  result.error = worker.error();
   result.ok = result.error.empty();
   return result;
 }

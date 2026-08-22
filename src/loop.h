@@ -16,4 +16,6 @@ struct RunResult {
 
 RunResult run_blocking(const Config& config);
 
+RunResult run_event_loop(const Config& config);
+
 }

@@ -34,13 +34,12 @@ int main(int argc, char** argv) {
 
   hammer::Config effective = parsed.config;
   effective.threads = 1;
-  effective.connections = 1;
   effective.open_loop = false;
 
   hammer::print_banner(effective);
-  std::fputs("  (blocking single-connection mode; the event loop is not wired up yet)\n", stderr);
+  std::fputs("  (single event loop thread; sharding and open loop are not wired up yet)\n", stderr);
 
-  const hammer::RunResult result = hammer::run_blocking(effective);
+  const hammer::RunResult result = hammer::run_event_loop(effective);
   if (!result.ok) {
     std::fprintf(stderr, "hammer: %s\n", result.error.c_str());
     return 1;

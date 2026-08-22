@@ -62,6 +62,12 @@ endif()
 
 message(STATUS "hammer version ${HAMMER_VERSION}, sanitizer ${HAMMER_SANITIZER_ACTIVE}")
 
+if(WIN32)
+  set(HAMMER_POLLER_SOURCE src/poller_wsapoll.cpp)
+else()
+  set(HAMMER_POLLER_SOURCE src/poller_epoll.cpp)
+endif()
+
 add_library(hammer_core STATIC
   src/cli.cpp
   src/http_parser.cpp
@@ -69,6 +75,8 @@ add_library(hammer_core STATIC
   src/conn.cpp
   src/stats.cpp
   src/loop.cpp
+  src/worker.cpp
+  ${HAMMER_POLLER_SOURCE}
 )
 target_include_directories(hammer_core PUBLIC src)
 target_compile_definitions(hammer_core PUBLIC HAMMER_VERSION_STRING="${HAMMER_VERSION}")
