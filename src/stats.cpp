@@ -41,6 +41,7 @@ const std::vector<PercentileRow>& full_spectrum() {
 void Stats::merge(const Stats& other) {
   latency.merge(other.latency);
   dispatch_lag.merge(other.dispatch_lag);
+  scheduler_lag.merge(other.scheduler_lag);
   requests += other.requests;
   bytes_read += other.bytes_read;
   non_2xx += other.non_2xx;
@@ -106,18 +107,27 @@ void print_report(const Config& config, const Stats& stats, double elapsed_secon
     std::printf("  Non-2xx responses %llu\n", static_cast<unsigned long long>(stats.non_2xx));
   }
 
-  if (config.open_loop) {
+  if (config.paced) {
     const double mean_lag = stats.dispatch_lag.mean();
     std::printf("  Dispatch lag   mean %s, max %s, %llu requests behind schedule\n",
                 format_duration(mean_lag).c_str(),
                 format_duration(static_cast<double>(stats.dispatch_lag.max())).c_str(),
                 static_cast<unsigned long long>(stats.behind_schedule));
-    if (mean_lag > 10'000'000.0) {
+    const double scheduler_mean = stats.scheduler_lag.mean();
+    if (stats.scheduler_lag.count() > 0 && scheduler_mean > 10'000'000.0) {
       std::printf(
-          "\n  warning: mean dispatch lag is %s, so hammer could not keep up with the\n"
-          "  requested rate. These numbers describe hammer's own bottleneck, not the\n"
-          "  server's. Lower --rate or add threads.\n",
-          format_duration(mean_lag).c_str());
+          "\n  warning: hammer was %s late dispatching requests that had an idle\n"
+          "  connection waiting, so these numbers describe hammer's own bottleneck\n"
+          "  rather than the server's. Lower --rate or add threads.\n",
+          format_duration(scheduler_mean).c_str());
+    } else if (stats.requests > 0 && stats.behind_schedule * 10 > stats.requests) {
+      std::printf(
+          "\n  note: %llu of %llu requests departed late because every connection was\n"
+          "  still waiting on the server, not because hammer fell behind. The server\n"
+          "  cannot sustain %llu req/s; the corrected latencies above account for it.\n",
+          static_cast<unsigned long long>(stats.behind_schedule),
+          static_cast<unsigned long long>(stats.requests),
+          static_cast<unsigned long long>(config.rate));
     }
   }
   std::fflush(stdout);

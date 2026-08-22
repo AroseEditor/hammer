@@ -21,7 +21,7 @@ std::string build_request(const Config& config);
 
 net::socket_t open_socket(const Endpoint& endpoint);
 
-enum class ConnState { Closed, Connecting, Writing, Reading };
+enum class ConnState { Closed, Connecting, Scheduled, Writing, Reading };
 
 enum class ConnectStart { Established, InProgress, Failed };
 
@@ -35,6 +35,7 @@ struct Conn {
   uint64_t received_this_exchange = 0;
   std::chrono::steady_clock::time_point request_started{};
   std::chrono::steady_clock::time_point intended_departure{};
+  bool claimed_late = false;
   ResponseParser parser;
 };
 

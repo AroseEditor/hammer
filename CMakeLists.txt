@@ -83,7 +83,7 @@ target_compile_definitions(hammer_core PUBLIC HAMMER_VERSION_STRING="${HAMMER_VE
 target_link_libraries(hammer_core PUBLIC hammer_build_opts)
 
 if(WIN32)
-  target_link_libraries(hammer_core PUBLIC ws2_32)
+  target_link_libraries(hammer_core PUBLIC ws2_32 winmm)
 endif()
 
 add_executable(hammer src/main.cpp)

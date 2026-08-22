@@ -7,6 +7,8 @@ namespace {
 
 constexpr int kMaxConsecutiveConnectFailures = 200;
 constexpr int kPollSliceMs = 20;
+// sleeping into a departure costs the host timer granularity, which is ~15ms on windows
+constexpr long long kSpinBelowMs = 2;
 
 uint64_t nanos_between(Worker::Clock::time_point from, Worker::Clock::time_point to) {
   const auto delta = std::chrono::duration_cast<std::chrono::nanoseconds>(to - from).count();
@@ -16,12 +18,14 @@ uint64_t nanos_between(Worker::Clock::time_point from, Worker::Clock::time_point
 }
 
 Worker::Worker(const Config& config, const Endpoint& endpoint, const std::string& request,
-               int connections)
+               int connections, double rate_per_second)
     : config_(config),
       endpoint_(endpoint),
       request_(request),
       head_request_(config.method == "HEAD"),
       buffer_(64 * 1024) {
+  interval_ns_ = rate_per_second > 0.0 ? 1e9 / rate_per_second : 0.0;
+  correct_latency_ = config.open_loop;
   conns_.resize(static_cast<size_t>(connections));
   index_by_fd_.reserve(static_cast<size_t>(connections) * 2);
   pending_open_.reserve(static_cast<size_t>(connections));
@@ -78,12 +82,59 @@ void Worker::close_connection(size_t index) {
 
 void Worker::begin_request(size_t index) {
   Conn& conn = conns_[index];
-  conn.state = ConnState::Writing;
   conn.write_offset = 0;
   conn.received_this_exchange = 0;
-  conn.request_started = Clock::now();
   conn.parser.reset(head_request_);
+
+  if (interval_ns_ <= 0.0) {
+    conn.intended_departure = Clock::now();
+    conn.request_started = conn.intended_departure;
+    conn.state = ConnState::Writing;
+    flush_write(index);
+    return;
+  }
+
+  // the departure time is decided by the schedule, not by when a connection happened to free up
+  const double offset = static_cast<double>(departures_++) * interval_ns_;
+  conn.intended_departure = t0_ + std::chrono::nanoseconds(static_cast<int64_t>(offset));
+  conn.state = ConnState::Scheduled;
+  poller_.mod(conn.fd, false, false);
+
+  const Clock::time_point now = Clock::now();
+  conn.claimed_late = now >= conn.intended_departure;
+  if (conn.claimed_late) dispatch(index);
+}
+
+void Worker::dispatch(size_t index) {
+  Conn& conn = conns_[index];
+  conn.request_started = Clock::now();
+
+  const uint64_t lag = nanos_between(conn.intended_departure, conn.request_started);
+  stats_.dispatch_lag.record(lag);
+  if (conn.claimed_late) {
+    ++stats_.behind_schedule;
+  } else {
+    // no connection was busy, so any lateness here is hammer's own scheduling
+    stats_.scheduler_lag.record(lag);
+  }
+
+  conn.state = ConnState::Writing;
   flush_write(index);
+}
+
+Worker::Clock::time_point Worker::release_scheduled() {
+  Clock::time_point earliest = Clock::time_point::max();
+  const Clock::time_point now = Clock::now();
+
+  for (size_t i = 0; i < conns_.size(); ++i) {
+    if (conns_[i].state != ConnState::Scheduled) continue;
+    if (conns_[i].intended_departure <= now) {
+      dispatch(i);
+      continue;
+    }
+    earliest = std::min(earliest, conns_[i].intended_departure);
+  }
+  return earliest;
 }
 
 void Worker::flush_write(size_t index) {
@@ -181,7 +232,9 @@ void Worker::on_readable(size_t index) {
 void Worker::finish_response(size_t index) {
   Conn& conn = conns_[index];
 
-  stats_.latency.record(nanos_between(conn.request_started, Clock::now()));
+  const Clock::time_point origin =
+      correct_latency_ ? conn.intended_departure : conn.request_started;
+  stats_.latency.record(nanos_between(origin, Clock::now()));
   ++stats_.requests;
   ++conn.responses;
   if (conn.parser.status_code() < 200 || conn.parser.status_code() >= 300) ++stats_.non_2xx;
@@ -207,13 +260,23 @@ void Worker::expire_connects() {
   }
 }
 
-void Worker::run(Clock::time_point deadline) {
+void Worker::run(Clock::time_point start, Clock::time_point deadline) {
+  t0_ = start;
   for (size_t i = 0; i < conns_.size() && error_.empty(); ++i) open_connection(i);
 
   while (Clock::now() < deadline && error_.empty()) {
+    const Clock::time_point next_departure = release_scheduled();
+
+    const Clock::time_point now = Clock::now();
+    long long slice = kPollSliceMs;
+    if (next_departure != Clock::time_point::max()) {
+      slice = std::chrono::duration_cast<std::chrono::milliseconds>(next_departure - now).count();
+      if (slice <= kSpinBelowMs) slice = 0;
+    }
     const auto remaining =
-        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
-    const int timeout_ms = static_cast<int>(std::clamp<long long>(remaining, 0, kPollSliceMs));
+        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+    const int timeout_ms =
+        static_cast<int>(std::clamp<long long>(std::min(remaining, slice), 0, kPollSliceMs));
 
     for (const Event& event : poller_.wait(timeout_ms)) {
       const auto slot = index_by_fd_.find(event.fd);

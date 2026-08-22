@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -18,6 +19,8 @@ struct ServerOptions {
   bool close_before_response = false;
   bool never_respond = false;
   int responses_before_close = 0;
+  int stall_after_responses = 0;
+  int stall_ms = 0;
 };
 
 inline uint16_t reserve_closed_port() {
@@ -143,6 +146,14 @@ private:
         return;
       }
 
+      if (options_.stall_after_responses > 0 &&
+          served_.load() >= static_cast<uint64_t>(options_.stall_after_responses) &&
+          !stalled_.exchange(true)) {
+        std::unique_lock<std::shared_mutex> gate{stall_gate_};
+        std::this_thread::sleep_for(std::chrono::milliseconds(options_.stall_ms));
+      }
+      std::shared_lock<std::shared_mutex> gate{stall_gate_};
+
       size_t written = 0;
       while (written < options_.response.size()) {
         const long n = net::send_bytes(client, options_.response.data() + written,
@@ -165,6 +176,8 @@ private:
   uint16_t port_ = 0;
   std::atomic<bool> running_{true};
   std::atomic<uint64_t> served_{0};
+  std::shared_mutex stall_gate_;
+  std::atomic<bool> stalled_{false};
   std::mutex clients_mutex_;
   std::vector<std::thread> clients_;
   std::thread worker_;

@@ -24,6 +24,7 @@ struct Config {
   int duration_s = 10;
   uint64_t rate = 0;
   int timeout_ms = 2000;
+  bool paced = false;
   bool open_loop = false;
   bool print_latency = false;
   bool json = false;

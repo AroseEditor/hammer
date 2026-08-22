@@ -11,6 +11,7 @@ namespace hammer {
 struct Stats {
   Histogram latency;
   Histogram dispatch_lag;
+  Histogram scheduler_lag;
   uint64_t requests = 0;
   uint64_t bytes_read = 0;
   uint64_t non_2xx = 0;

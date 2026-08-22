@@ -32,8 +32,7 @@ int main(int argc, char** argv) {
   const hammer::net::Startup network;
   hammer::net::ignore_sigpipe();
 
-  hammer::Config effective = parsed.config;
-  effective.open_loop = false;
+  const hammer::Config& effective = parsed.config;
 
   hammer::print_banner(effective);
   std::fputs("  (open-loop scheduling is not wired up yet; running closed loop)\n", stderr);

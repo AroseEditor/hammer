@@ -281,6 +281,7 @@ ParseResult parse_args(const std::vector<std::string>& args) {
                 "; every thread needs at least one connection");
   }
 
+  cfg.paced = rate_set;
   cfg.open_loop = rate_set && !force_closed_loop;
   result.outcome = ParseOutcome::Ok;
   return result;

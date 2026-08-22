@@ -5,6 +5,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+#include <timeapi.h>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -17,8 +19,13 @@ struct Startup {
   Startup() {
     WSADATA data;
     WSAStartup(MAKEWORD(2, 2), &data);
+    // the default 15.6ms timer tick would dominate open-loop dispatch accuracy
+    timeBeginPeriod(1);
   }
-  ~Startup() { WSACleanup(); }
+  ~Startup() {
+    timeEndPeriod(1);
+    WSACleanup();
+  }
   Startup(const Startup&) = delete;
   Startup& operator=(const Startup&) = delete;
 };

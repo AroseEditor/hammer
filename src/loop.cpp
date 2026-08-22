@@ -207,8 +207,10 @@ RunResult run_event_loop(const Config& config) {
   const int base = config.connections / thread_count;
   const int remainder = config.connections % thread_count;
   for (int i = 0; i < thread_count; ++i) {
-    workers.push_back(std::make_unique<Worker>(config, endpoint, request,
-                                               base + (i < remainder ? 1 : 0)));
+    const int shard = base + (i < remainder ? 1 : 0);
+    const double share = static_cast<double>(shard) / static_cast<double>(config.connections);
+    const double rate = config.paced ? static_cast<double>(config.rate) * share : 0.0;
+    workers.push_back(std::make_unique<Worker>(config, endpoint, request, shard, rate));
   }
 
   const Clock::time_point start = Clock::now();
@@ -217,9 +219,10 @@ RunResult run_event_loop(const Config& config) {
   std::vector<std::thread> threads;
   threads.reserve(static_cast<size_t>(thread_count));
   for (int i = 1; i < thread_count; ++i) {
-    threads.emplace_back([&workers, deadline, i] { workers[static_cast<size_t>(i)]->run(deadline); });
+    threads.emplace_back(
+        [&workers, start, deadline, i] { workers[static_cast<size_t>(i)]->run(start, deadline); });
   }
-  workers[0]->run(deadline);
+  workers[0]->run(start, deadline);
   for (std::thread& thread : threads) thread.join();
 
   result.elapsed_seconds = std::chrono::duration<double>(Clock::now() - start).count();

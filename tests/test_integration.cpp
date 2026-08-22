@@ -334,3 +334,74 @@ TEST_CASE("an uneven shard split still uses every connection") {
   REQUIRE(result.stats.requests > 7);
   REQUIRE(result.stats.read_errors == 0);
 }
+
+TEST_CASE("a paced run issues roughly the requested rate") {
+  MockServer server{ServerOptions{}};
+  const RunResult result = hammer::run_event_loop(
+      config_for(server.url(), {"-c", "8", "-t", "2", "-d", "2", "--rate", "400"}));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests > 600);
+  REQUIRE(result.stats.requests < 1000);
+  REQUIRE(result.stats.read_errors == 0);
+  REQUIRE(result.stats.dispatch_lag.count() == result.stats.requests);
+}
+
+TEST_CASE("correction changes the tail while the load stays the same") {
+  ServerOptions options;
+  options.stall_after_responses = 500;
+  options.stall_ms = 200;
+
+  const std::vector<std::string> paced = {"-c", "8",     "-t",      "2",
+                                          "-d", "3",     "--rate",  "1000"};
+  std::vector<std::string> uncorrected = paced;
+  uncorrected.push_back("--closed-loop");
+
+  RunResult corrected_run;
+  RunResult uncorrected_run;
+  {
+    MockServer server{options};
+    corrected_run = hammer::run_event_loop(config_for(server.url(), paced));
+  }
+  {
+    MockServer server{options};
+    uncorrected_run = hammer::run_event_loop(config_for(server.url(), uncorrected));
+  }
+
+  REQUIRE(corrected_run.ok);
+  REQUIRE(uncorrected_run.ok);
+  REQUIRE(corrected_run.stats.requests > 2000);
+  REQUIRE(uncorrected_run.stats.requests > 2000);
+
+  const uint64_t corrected_p99 = corrected_run.stats.latency.percentile(99);
+  const uint64_t uncorrected_p99 = uncorrected_run.stats.latency.percentile(99);
+
+  INFO("corrected p99 " << corrected_p99 << "ns, uncorrected p99 " << uncorrected_p99 << "ns");
+  REQUIRE(corrected_p99 > 100'000'000);
+  REQUIRE(uncorrected_p99 < 50'000'000);
+  REQUIRE(corrected_p99 > uncorrected_p99 * 10);
+}
+
+TEST_CASE("an unpaced run reports no dispatch lag") {
+  MockServer server{ServerOptions{}};
+  const RunResult result = hammer::run_event_loop(config_for(server.url(), {"-c", "4"}));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.dispatch_lag.count() == 0);
+  REQUIRE(result.stats.behind_schedule == 0);
+}
+
+TEST_CASE("a fast server leaves hammer with sub-millisecond scheduling lag") {
+  MockServer server{ServerOptions{}};
+  const RunResult result = hammer::run_event_loop(
+      config_for(server.url(), {"-c", "8", "-t", "2", "-d", "2", "--rate", "2000"}));
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stats.requests > 3000);
+  REQUIRE(result.stats.scheduler_lag.count() > 0);
+
+  INFO("scheduler lag mean " << result.stats.scheduler_lag.mean() << "ns p99 "
+                             << result.stats.scheduler_lag.percentile(99) << "ns");
+  REQUIRE(result.stats.scheduler_lag.mean() < 1'000'000.0);
+  REQUIRE(result.stats.behind_schedule * 10 < result.stats.requests);
+}
