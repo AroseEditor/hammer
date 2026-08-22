@@ -118,6 +118,18 @@ target_link_libraries(hammer_core PUBLIC Threads::Threads)
 
 catch_discover_tests(hammer_tests)
 
+find_package(Python3 COMPONENTS Interpreter)
+
+if(Python3_Interpreter_FOUND)
+  add_test(
+    NAME hostile_server_modes
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/hostile_suite.py
+            $<TARGET_FILE:hammer>)
+  set_tests_properties(hostile_server_modes PROPERTIES TIMEOUT 400)
+else()
+  message(WARNING "python3 not found; the hostile server suite will not run")
+endif()
+
 option(HAMMER_FUZZ "build the libFuzzer parser target (clang only)" OFF)
 
 if(HAMMER_FUZZ)
